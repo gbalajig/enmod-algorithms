@@ -52,6 +52,9 @@
 #include "enmod/ParallelDynamicAVISolver.h"
 #include "enmod/ParallelHybridSolvers.h" 
 
+#include "enmod/EnhancedHybridDPRLSolver.h"
+#include "enmod/DynamicEnhancedHybridDPRLSolver.h"
+
 #include <cuda_runtime.h>
 #include <iostream>
 #include <vector>
@@ -115,7 +118,8 @@ void runComparisonScenario(const json& config, const std::string& report_path, s
     solvers.push_back(std::make_unique<DynamicHierarchicalSolver>(grid));
     solvers.push_back(std::make_unique<DynamicPolicyBlendingSolver>(grid));
 
-
+    solvers.push_back(std::make_unique<EnhancedHybridDPRLSolver>(grid));
+    solvers.push_back(std::make_unique<DynamicEnhancedHybridDPRLSolver>(grid));
 
     // Parallel
     if (isGpuAvailable()) {

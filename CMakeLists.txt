@@ -65,7 +65,8 @@ set(SOURCES
     src/DynamicHybridDPRLSolver.cpp
     src/DynamicPolicyBlendingSolver.cpp
     src/DynamicHierarchicalSolver.cpp
-    
+    src/EnhancedHybridDPRLSolver.cpp
+    src/DynamicEnhancedHybridDPRLSolver.cpp
     # Parallel Solvers
     src/ParallelSolverBase.cu
     src/ParallelBIDP.cpp

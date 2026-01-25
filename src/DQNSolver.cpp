@@ -1,294 +1,227 @@
 #include "enmod/DQNSolver.h"
 #include "enmod/Logger.h"
-#include <random>
-#include <chrono>
+#include "enmod/json.hpp" 
+#include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <cmath>
 #include <algorithm>
-#include <numeric>
+#include <iomanip>
+#include <random>
+#include <ctime>
 
-// --- Helper Functions ---
-static std::mt19937& get_rng() {
-    static std::mt19937 rng(static_cast<unsigned int>(std::chrono::steady_clock::now().time_since_epoch().count()));
-    return rng;
-}
+using json = nlohmann::json;
 
-// --- NeuralNetwork Implementation ---
-NeuralNetwork::NeuralNetwork(int in_size, int hid_size, int out_size)
-    : input_size(in_size), hidden_size(hid_size), output_size(out_size) {
-    std::uniform_real_distribution<double> dist(-0.5, 0.5);
-    
-    weights1.resize(hidden_size, std::vector<double>(input_size));
-    bias1.resize(hidden_size);
-    for (auto& row : weights1) for (auto& val : row) val = dist(get_rng());
-    for (auto& val : bias1) val = dist(get_rng());
-
-    weights2.resize(output_size, std::vector<double>(hidden_size));
-    bias2.resize(output_size);
-    for (auto& row : weights2) for (auto& val : row) val = dist(get_rng());
-    for (auto& val : bias2) val = dist(get_rng());
-}
-
-std::vector<double> NeuralNetwork::predict(const std::vector<double>& input) {
-    std::vector<double> hidden(hidden_size);
-    for (int i = 0; i < hidden_size; ++i) {
-        double sum = bias1[i];
-        for (int j = 0; j < input_size; ++j) {
-            sum += input[j] * weights1[i][j];
-        }
-        hidden[i] = relu(sum);
-    }
-
-    std::vector<double> output(output_size);
-    for (int i = 0; i < output_size; ++i) {
-        double sum = bias2[i];
-        for (int j = 0; j < hidden_size; ++j) {
-            sum += hidden[j] * weights2[i][j];
-        }
-        output[i] = sum; // No activation on final Q-values
-    }
-    return output;
-}
-
-void NeuralNetwork::train(const std::vector<double>& input, const std::vector<double>& target) {
-    // This is a simplified backpropagation for a single training sample
-    // A real implementation would use a more robust optimizer (like Adam) and batching.
-
-    // Forward pass
-    std::vector<double> hidden(hidden_size);
-    std::vector<double> hidden_pre_activation(hidden_size);
-    for (int i = 0; i < hidden_size; ++i) {
-        double sum = bias1[i];
-        for (int j = 0; j < input_size; ++j) sum += input[j] * weights1[i][j];
-        hidden_pre_activation[i] = sum;
-        hidden[i] = relu(sum);
-    }
-    std::vector<double> output = predict(input);
-
-    // Backward pass
-    // Calculate output layer error
-    std::vector<double> output_error(output_size);
-    for (int i = 0; i < output_size; ++i) {
-        output_error[i] = target[i] - output[i];
-    }
-
-    // Calculate hidden layer error
-    std::vector<double> hidden_error(hidden_size);
-    for (int i = 0; i < hidden_size; ++i) {
-        double error = 0.0;
-        for (int j = 0; j < output_size; ++j) {
-            error += output_error[j] * weights2[j][i];
-        }
-        hidden_error[i] = error * (hidden_pre_activation[i] > 0 ? 1 : 0); // Derivative of ReLU
-    }
-
-    // Update weights and biases
-    for (int i = 0; i < output_size; ++i) {
-        for (int j = 0; j < hidden_size; ++j) {
-            weights2[i][j] += learning_rate * output_error[i] * hidden[j];
-        }
-        bias2[i] += learning_rate * output_error[i];
-    }
-    for (int i = 0; i < hidden_size; ++i) {
-        for (int j = 0; j < input_size; ++j) {
-            weights1[i][j] += learning_rate * hidden_error[i] * input[j];
-        }
-        bias1[i] += learning_rate * hidden_error[i];
-    }
-}
-
-
-// --- ReplayBuffer Implementation ---
-ReplayBuffer::ReplayBuffer(size_t cap) : capacity(cap) {}
-
-void ReplayBuffer::push(const Transition& transition) {
-    if (memory.size() == capacity) memory.pop_front();
-    memory.push_back(transition);
-}
-
-std::vector<Transition> ReplayBuffer::sample(size_t batch_size) {
-    std::vector<Transition> batch;
-    std::uniform_int_distribution<size_t> dist(0, memory.size() - 1);
-    
-    batch_size = std::min(batch_size, memory.size());
-    for (size_t i = 0; i < batch_size; ++i) {
-        batch.push_back(memory[dist(get_rng())]);
-    }
-    return batch;
-}
-size_t ReplayBuffer::size() const { return memory.size(); }
-
-
-// --- DQNSolver Implementation ---
-DQNSolver::DQNSolver(const Grid& grid_ref)
-    : Solver(grid_ref, "DQN"),
-      policy_net(5 * 5, 24, 4), // Input: 5x5 grid view, Hidden: 24, Output: 4 actions
-      target_net(5 * 5, 24, 4),
-      replay_buffer(10000)
+DQNSolver::DQNSolver(const Grid& grid_ref) 
+    : Solver(grid_ref, "DQNSolver"),
+      epsilon(0.9),      
+      epsilon_decay(0.995),
+      min_epsilon(0.01),
+      alpha(0.1),        
+      gamma(0.95),       
+      max_episodes(1000),
+      total_cost{0,0,0} // Default init
 {
-    target_net = policy_net; // Initialize target network with policy network weights
-    Logger::log(LogLevel::INFO, "DQN Solver initialized with a neural network.");
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
 }
 
-std::vector<double> DQNSolver::getStateRepresentation(const Grid& current_grid, const Position& pos) {
-    // Create a 5x5 flattened vector representing the agent's local view
-    std::vector<double> state_repr;
-    state_repr.reserve(5 * 5);
-    for (int r_offset = -2; r_offset <= 2; ++r_offset) {
-        for (int c_offset = -2; c_offset <= 2; ++c_offset) {
-            Position p = {pos.row + r_offset, pos.col + c_offset};
-            if (!current_grid.isWalkable(p.row, p.col)) {
-                state_repr.push_back(-1.0); // Wall
-            } else if (current_grid.getCellType(p) == CellType::FIRE) {
-                state_repr.push_back(1.0); // Fire
-            } else if (current_grid.getCellType(p) == CellType::SMOKE) {
-                state_repr.push_back(0.5); // Smoke
-            } else {
-                state_repr.push_back(0.0); // Empty
-            }
-        }
-    }
-    return state_repr;
-}
-
-Direction DQNSolver::chooseAction(const std::vector<double>& state_representation, const Grid& current_grid, const Position& pos) {
-    std::uniform_real_distribution<> dist(0.0, 1.0);
-
-    if (dist(get_rng()) < epsilon) {
-        std::vector<Direction> valid_actions;
-        if (current_grid.isWalkable(pos.row - 1, pos.col)) valid_actions.push_back(Direction::UP);
-        if (current_grid.isWalkable(pos.row + 1, pos.col)) valid_actions.push_back(Direction::DOWN);
-        if (current_grid.isWalkable(pos.row, pos.col - 1)) valid_actions.push_back(Direction::LEFT);
-        if (current_grid.isWalkable(pos.row, pos.col + 1)) valid_actions.push_back(Direction::RIGHT);
-        if (valid_actions.empty()) return Direction::STAY;
-        std::uniform_int_distribution<size_t> action_dist(0, valid_actions.size() - 1);
-        return valid_actions[action_dist(get_rng())];
-    } else {
-        auto q_values = policy_net.predict(state_representation);
-        return static_cast<Direction>(std::distance(q_values.begin(), std::max_element(q_values.begin(), q_values.end())));
-    }
-}
-
-void DQNSolver::replay() {
-    if (replay_buffer.size() < batch_size) return;
-
-    std::vector<Transition> batch = replay_buffer.sample(batch_size);
-    
-    for (const auto& transition : batch) {
-        std::vector<double> q_values = policy_net.predict(transition.state);
-        std::vector<double> q_values_next = target_net.predict(transition.next_state);
-        double max_q_next = *std::max_element(q_values_next.begin(), q_values_next.end());
-        
-        double target_q = transition.reward;
-        if (!transition.done) {
-            target_q += gamma * max_q_next;
-        }
-
-        std::vector<double> target_q_values = q_values;
-        target_q_values[static_cast<int>(transition.action)] = target_q;
-
-        policy_net.train(transition.state, target_q_values);
-    }
-    
-    if (epsilon > epsilon_min) epsilon *= epsilon_decay;
-
-    if (++target_update_counter > 10) {
-        target_net = policy_net;
-        target_update_counter = 0;
-    }
-}
-
-void DQNSolver::assessThreatAndSetMode(const Position& current_pos, const Grid& current_grid) {
-    const auto& events = current_grid.getConfig().value("dynamic_events", json::array());
-    current_mode = EvacuationMode::NORMAL;
-    for (const auto& event : events) {
-        if (event.value("type", "") == "fire") {
-            Position fire_pos = {event.at("position").at("row"), event.at("position").at("col")};
-            if (current_grid.getCellType(fire_pos) == CellType::FIRE) {
-                 int radius = 1;
-                if(event.value("size", "small") == "medium") radius = 2;
-                if(event.value("size", "small") == "large") radius = 3;
-                int dist = std::abs(current_pos.row - fire_pos.row) + std::abs(current_pos.col - fire_pos.col);
-                if (dist <= 1) { current_mode = EvacuationMode::PANIC; return; }
-                if (dist <= radius) { current_mode = EvacuationMode::ALERT; }
-            }
-        }
-    }
-}
+// --- CORE LOGIC ---
 
 void DQNSolver::run() {
-    Cost::current_mode = EvacuationMode::NORMAL;
-    Grid dynamic_grid = grid;
-    Position current_pos = dynamic_grid.getStartPosition();
-    total_cost = {0, 0, 0};
-    history.clear();
-
-    const auto& events = dynamic_grid.getConfig().value("dynamic_events", json::array());
-
-    for (int t = 0; t < 2 * (dynamic_grid.getRows() * dynamic_grid.getCols()); ++t) {
-        for (const auto& event_cfg : events) {
-            if (event_cfg.value("time_step", -1) == t) dynamic_grid.addHazard(event_cfg);
-        }
-
-        assessThreatAndSetMode(current_pos, dynamic_grid);
-        Cost::current_mode = current_mode;
-        
-        std::vector<double> state_repr = getStateRepresentation(dynamic_grid, current_pos);
-        Direction move_dir = chooseAction(state_repr, dynamic_grid, current_pos);
-        Position next_pos = dynamic_grid.getNextPosition(current_pos, move_dir);
-
-        double reward = -1.0;
-        bool done = false;
-        if (!dynamic_grid.isWalkable(next_pos.row, next_pos.col)) {
-            reward = -100.0;
-            next_pos = current_pos;
-        } else if (dynamic_grid.isExit(next_pos.row, next_pos.col)) {
-            reward = 1000.0;
-            done = true;
-        } else if (dynamic_grid.getCellType(next_pos) == CellType::FIRE) {
-            reward = -200.0;
-        }
-
-        std::vector<double> next_state_repr = getStateRepresentation(dynamic_grid, next_pos);
-        replay_buffer.push({state_repr, move_dir, reward, next_state_repr, done});
-
-        std::string action_str = "STAY";
-        if (move_dir == Direction::UP) action_str = "UP";
-        else if (move_dir == Direction::DOWN) action_str = "DOWN";
-        else if (move_dir == Direction::LEFT) action_str = "LEFT";
-        else if (move_dir == Direction::RIGHT) action_str = "RIGHT";
-        history.push_back({t, dynamic_grid, current_pos, action_str, total_cost, current_mode});
-
-        total_cost = total_cost + dynamic_grid.getMoveCost(current_pos);
-        current_pos = next_pos;
-
-        replay();
-        
-        if (done) {
-            history.push_back({t + 1, dynamic_grid, current_pos, "SUCCESS: Reached Exit.", total_cost, current_mode});
-            break;
-        }
+    std::string model_file = "data/dqn_model_" + grid.getName() + ".json";
+    
+    // Ensure data directory exists
+    if (!std::filesystem::exists("data")) {
+        std::filesystem::create_directory("data");
     }
 
-    if(history.empty() || history.back().action.find("SUCCESS") == std::string::npos) {
-         history.push_back({(int)history.size(), dynamic_grid, current_pos, "FAILURE: Timed out.", total_cost, current_mode});
-         total_cost = {};
+    bool model_loaded = loadModel(model_file);
+
+    if (model_loaded) {
+        Logger::log(LogLevel::INFO, "DQN: Model loaded. Skipping training.");
+        epsilon = min_epsilon; // Exploitation mode
+    } else {
+        Logger::log(LogLevel::INFO, "DQN: No model found. Starting training...");
+        train();
+        saveModel(model_file);
+    }
+
+    navigate();
+}
+
+void DQNSolver::train() {
+    int rows = grid.getRows();
+    int cols = grid.getCols();
+    Position start = grid.getStartPosition();
+
+    for (int episode = 0; episode < max_episodes; ++episode) {
+        Position state = start;
+        int step_count = 0;
+        int max_steps = rows * cols * 2;
+        
+        while (step_count < max_steps) {
+            if (grid.isExit(state.row, state.col)) break;
+
+            // 1. Action
+            int action_idx = chooseAction(state); 
+
+            // 2. Step
+            Position next_state = getNextPosition(state, action_idx);
+            
+            // 3. Reward
+            double reward = -1.0; 
+            if (grid.isExit(next_state.row, next_state.col)) reward = 100.0;
+            else if (grid.getCellType(next_state) == CellType::WALL) reward = -100.0;
+            else if (grid.getCellType(next_state) == CellType::FIRE) reward = -50.0;
+            else if (grid.getSmokeIntensity(next_state) == "heavy") reward = -20.0;
+
+            // 4. Update
+            double old_q = getQValue(state, action_idx);
+            double max_next_q = getMaxQ(next_state);
+            double new_q = old_q + alpha * (reward + gamma * max_next_q - old_q);
+            setQValue(state, action_idx, new_q);
+
+            // 5. Transition
+            if (grid.isWalkable(next_state.row, next_state.col)) {
+                state = next_state;
+            }
+
+            step_count++;
+        }
+
+        if (epsilon > min_epsilon) epsilon *= epsilon_decay;
     }
 }
 
-Cost DQNSolver::getEvacuationCost() const { return total_cost; }
+void DQNSolver::navigate() {
+    path.clear();
+    total_cost = {0, 0, 0}; 
+
+    Position current = grid.getStartPosition();
+    path.push_back(current);
+    
+    int steps = 0;
+    int max_steps = grid.getRows() * grid.getCols() * 2;
+
+    while (steps < max_steps) {
+        if (grid.isExit(current.row, current.col)) break;
+
+        // Greedy choice
+        int best_action = -1;
+        double best_val = -1e9;
+        
+        for (int a = 0; a < 4; ++a) {
+            Position next = getNextPosition(current, a);
+            if (grid.isWalkable(next.row, next.col)) {
+                double q = getQValue(current, a);
+                if (q > best_val) {
+                    best_val = q;
+                    best_action = a;
+                }
+            }
+        }
+
+        if (best_action == -1) break; // Trapped
+
+        Position next_pos = getNextPosition(current, best_action);
+        
+        // Sum up cost
+        Cost move_cost = grid.getMoveCost(current);
+        total_cost = total_cost + move_cost;
+
+        current = next_pos;
+        path.push_back(current);
+        steps++;
+    }
+}
+
+// --- PERSISTENCE ---
+
+void DQNSolver::saveModel(const std::string& filename) const {
+    try {
+        json j;
+        for (const auto& entry : q_table) {
+            std::string key = std::to_string(entry.first.row) + "," + std::to_string(entry.first.col);
+            j["q_table"][key] = entry.second;
+        }
+        std::ofstream o(filename);
+        o << std::setw(4) << j << std::endl;
+        Logger::log(LogLevel::INFO, "DQN: Saved model to " + filename);
+    } catch (const std::exception& e) {
+        Logger::log(LogLevel::ERROR, "DQN: Save failed - " + std::string(e.what()));
+    }
+}
+
+bool DQNSolver::loadModel(const std::string& filename) {
+    if (!std::filesystem::exists(filename)) return false;
+    try {
+        std::ifstream i(filename);
+        json j;
+        i >> j;
+        q_table.clear();
+        for (auto& el : j["q_table"].items()) {
+            std::string key = el.key();
+            size_t comma = key.find(',');
+            int r = std::stoi(key.substr(0, comma));
+            int c = std::stoi(key.substr(comma + 1));
+            q_table[{r, c}] = el.value().get<std::vector<double>>();
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// --- HELPERS ---
+
+int DQNSolver::chooseAction(const Position& state) {
+    if ((double)std::rand() / RAND_MAX < epsilon) return std::rand() % 4;
+    
+    int best_a = 0;
+    double max_q = -1e9;
+    for (int a = 0; a < 4; ++a) {
+        double q = getQValue(state, a);
+        if (q > max_q) {
+            max_q = q;
+            best_a = a;
+        }
+    }
+    return best_a;
+}
+
+double DQNSolver::getQValue(const Position& state, int action) {
+    if (q_table.find(state) == q_table.end()) q_table[state] = std::vector<double>(4, 0.0);
+    return q_table[state][action];
+}
+
+void DQNSolver::setQValue(const Position& state, int action, double val) {
+    if (q_table.find(state) == q_table.end()) q_table[state] = std::vector<double>(4, 0.0);
+    q_table[state][action] = val;
+}
+
+double DQNSolver::getMaxQ(const Position& state) {
+    if (q_table.find(state) == q_table.end()) return 0.0;
+    const auto& q_vals = q_table[state];
+    return *std::max_element(q_vals.begin(), q_vals.end());
+}
+
+Position DQNSolver::getNextPosition(const Position& p, int action) {
+    int r = p.row; 
+    int c = p.col;
+    if (action == 0) r--; // UP
+    else if (action == 1) r++; // DOWN
+    else if (action == 2) c--; // LEFT
+    else if (action == 3) c++; // RIGHT
+    return {r, c};
+}
+
+Cost DQNSolver::getEvacuationCost() const {
+    return total_cost;
+}
 
 void DQNSolver::generateReport(std::ofstream& report_file) const {
-    report_file << "<h2>Simulation History (DQN Solver)</h2>\n";
-    for (const auto& step : history) {
-        std::string mode_str;
-        switch(step.mode){
-            case EvacuationMode::NORMAL: mode_str = "NORMAL"; break;
-            case EvacuationMode::ALERT: mode_str = "ALERT"; break;
-            case EvacuationMode::PANIC: mode_str = "PANIC"; break;
-        }
-        report_file << "<h3>Time Step: " << step.time_step << " (Mode: " << mode_str << ")</h3>\n";
-        report_file << "<p><strong>Agent Position:</strong> (" << step.agent_pos.row << ", " << step.agent_pos.col << ")</p>\n";
-        report_file << "<p><strong>Action Taken:</strong> " << step.action << "</p>\n";
-        report_file << "<p><strong>Cumulative Cost:</strong> " << step.current_total_cost << "</p>\n";
-        report_file << step.grid_state.toHtmlStringWithAgent(step.agent_pos);
-    }
+    report_file << "<h3>DQN Solver Report</h3>";
+    report_file << "<p><strong>Training Episodes:</strong> " << max_episodes << "</p>";
+    report_file << "<p><strong>Path Length:</strong> " << path.size() << "</p>";
+    report_file << grid.toHtmlStringWithPath(path);
 }
