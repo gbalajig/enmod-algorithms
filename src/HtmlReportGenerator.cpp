@@ -5,35 +5,107 @@
 #include <vector>
 #include <iomanip>
 #include <iostream>
+#include <set>
 
-void writeHtmlHeader(std::ofstream& file, const std::string& title) {
-    file << "<!DOCTYPE html>\n<html lang='en'>\n<head>\n";
-    file << "<meta charset='UTF-8'>\n";
-    file << "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n";
-    file << "<title>" << title << "</title>\n";
-    file << "<style>\n";
-    file << "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }\n";
-    file << "h1, h2 { color: #444; border-bottom: 2px solid #ddd; padding-bottom: 10px; }\n";
-    file << "table { border-collapse: collapse; width: 100%; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }\n";
-    file << "th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }\n";
-    file << "th { background-color: #007bff; color: white; }\n";
-    file << "td.row-header { background-color: #f2f2f2; font-weight: bold; text-align: left; }\n";
-    file << ".container { max-width: 1400px; margin: auto; background: white; padding: 20px; border-radius: 8px; }\n";
-    file << ".grid-table { border-spacing: 0; border-collapse: separate; }\n";
-    file << ".grid-cell { width: 25px; height: 25px; text-align: center; vertical-align: middle; font-size: 12px; border: 1px solid #ccc; }\n";
-    file << ".wall { background-color: #343a40; color: white; }\n";
-    file << ".start { background-color: #28a745; color: white; }\n";
-    file << ".exit { background-color: #dc3545; color: white; }\n";
-    file << ".smoke { background-color: #6c757d; color: white; }\n";
-    file << ".fire { background-color: #ffc107; color: black; animation: pulse 1s infinite; }\n";
-    file << ".path { background-color: #17a2b8; }\n";
-    file << "@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }\n";
-    file << "</style>\n</head>\n<body>\n<div class='container'>\n";
-}
+// --- Internal Helpers (Hidden from Linker to prevent LNK2005) ---
+namespace {
 
-void writeHtmlFooter(std::ofstream& file) {
-    file << "</div>\n</body>\n</html>";
-}
+    struct SolverCategory {
+        std::string processing;  
+        std::string environment; 
+        std::string algorithm;   
+    };
+
+    void writeHtmlHeader(std::ofstream& file, const std::string& title) {
+        file << "<!DOCTYPE html>\n<html lang='en'>\n<head>\n";
+        file << "<meta charset='UTF-8'>\n";
+        file << "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n";
+        file << "<title>" << title << "</title>\n";
+        file << "<style>\n";
+        file << "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }\n";
+        file << "h1, h2 { color: #444; border-bottom: 2px solid #ddd; padding-bottom: 10px; }\n";
+        file << "table { border-collapse: collapse; width: 100%; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }\n";
+        file << "th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }\n";
+        file << "th { background-color: #007bff; color: white; }\n";
+        
+        file << ".header-level-1 { background-color: #212529; color: #fff; font-size: 1.2em; font-weight: bold; text-align: left; padding-left: 10px; text-transform: uppercase; letter-spacing: 1px; }\n"; 
+        file << ".header-level-2 { background-color: #495057; color: #fff; font-size: 1.0em; font-weight: bold; text-align: left; padding-left: 25px; }\n"; 
+        file << ".header-level-3 { background-color: #e9ecef; color: #495057; font-weight: bold; text-align: left; padding-left: 40px; font-style: italic; border-left: 5px solid #007bff; }\n"; 
+
+        file << ".container { max-width: 1400px; margin: auto; background: white; padding: 20px; border-radius: 8px; }\n";
+        file << ".grid-table { border-spacing: 0; border-collapse: separate; }\n";
+        file << ".grid-cell { width: 25px; height: 25px; text-align: center; vertical-align: middle; font-size: 12px; border: 1px solid #ccc; }\n";
+        file << ".wall { background-color: #343a40; color: white; }\n";
+        file << ".start { background-color: #28a745; color: white; }\n";
+        file << ".exit { background-color: #dc3545; color: white; }\n";
+        file << ".smoke { background-color: #6c757d; color: white; }\n";
+        file << ".fire { background-color: #ffc107; color: black; animation: pulse 1s infinite; }\n";
+        file << "@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }\n";
+        file << "</style>\n</head>\n<body>\n<div class='container'>\n";
+    }
+
+    void writeHtmlFooter(std::ofstream& file) {
+        file << "</div>\n</body>\n</html>";
+    }
+
+    // Strict categorization logic
+    SolverCategory categorizeSolver(const std::string& name) {
+        SolverCategory cat;
+        
+        // 1. Processing Type
+        if (name.find("Parallel") != std::string::npos) cat.processing = "Parallel Processing (GPU)";
+        else cat.processing = "Serial Processing (CPU)";
+
+        // 2. Environment Type
+        bool is_explicit_dynamic = (name.find("Dynamic") != std::string::npos || 
+                                    name.find("DStar") != std::string::npos || 
+                                    name.find("EnhancedHybrid") != std::string::npos);
+        cat.environment = is_explicit_dynamic ? "Dynamic Environment" : "Static Environment";
+
+        // 3. Algorithm Class
+        
+        // A. Enhanced Hybrid (Champion)
+        if (name.find("EnhancedHybrid") != std::string::npos) {
+            cat.algorithm = "Enhanced Hybrid DP-RL";
+            return cat;
+        }
+
+        // B. Reinforcement Learning (Excludes hybrids)
+        bool is_rl = (name.find("QLearning") != std::string::npos || 
+                      name.find("SARSA") != std::string::npos || 
+                      name.find("ActorCritic") != std::string::npos || 
+                      name.find("DQN") != std::string::npos ||
+                      name.find("RLEnhanced") != std::string::npos);
+        
+        if (is_rl) {
+            cat.algorithm = "Reinforcement Learning (RL)";
+            return cat;
+        }
+
+        // C. Hybrid DP-RL (Keywords include 'Blending')
+        bool is_hybrid_keyword = (name.find("Adaptive") != std::string::npos || 
+                                  name.find("Hierarchical") != std::string::npos ||
+                                  name.find("Hybrid") != std::string::npos || 
+                                  name.find("Interlaced") != std::string::npos || 
+                                  name.find("Blending") != std::string::npos || 
+                                  name.find("Policy") != std::string::npos);
+
+        if (is_hybrid_keyword) {
+            if (name.find("Dynamic") != std::string::npos) {
+                cat.algorithm = "Dynamic Hybrid DP-RL"; 
+            } else {
+                cat.algorithm = "Static Hybrid DP-RL";
+            }
+            return cat;
+        }
+
+        // D. Default
+        cat.algorithm = "Dynamic Programming (DP)";
+        return cat;
+    }
+} // end anonymous namespace
+
+// --- Class Implementations ---
 
 void HtmlReportGenerator::generateInitialGridReport(const Grid& grid, const std::string& path) {
     std::string file_path = path + "/_Initial_Grid.html";
@@ -55,7 +127,6 @@ void HtmlReportGenerator::generateSolverReport(const Solver& solver, const std::
     writeHtmlFooter(report_file);
 }
 
-// Updated to use the filename parameter
 void HtmlReportGenerator::generateSummaryReport(const std::vector<Result>& results, const std::string& path, const std::string& filename) {
     std::string file_path = path + "/" + filename;
     std::ofstream report_file(file_path);
@@ -74,28 +145,25 @@ void HtmlReportGenerator::generateSummaryReport(const std::vector<Result>& resul
         double exec_time = 0;
     };
 
-    std::map<std::string, std::map<std::string, Stats>> aggregated_data;
+    std::map<std::string, std::map<std::string, std::map<std::string, std::map<std::string, Stats>>>> hierarchy;
     std::vector<std::string> base_scenarios;
+    std::map<std::string, std::map<std::string, Stats>> raw_data;
 
     for (const auto& res : results) {
-        // Intelligent aggregation:
-        // If results contain multiple trials (e.g. "_T1", "_T2"), this logic groups them by base name.
-        // If results are from a single trial, "base_name" is just the scenario name, and average = actual value.
         std::string base_name = res.scenario_name;
+        // Strip suffixes like _T1, _T2 if they exist
         size_t last_underscore = base_name.find_last_of('_');
-        // Check if suffix is like "_T1", "_T2"
         if (last_underscore != std::string::npos && base_name.substr(last_underscore).rfind("_T", 0) == 0) {
             base_name = base_name.substr(0, last_underscore);
         }
 
-        if (aggregated_data.find(base_name) == aggregated_data.end()) {
-            base_scenarios.push_back(base_name);
-        }
+        bool found = false;
+        for(const auto& s : base_scenarios) if(s == base_name) found = true;
+        if(!found) base_scenarios.push_back(base_name);
 
-        Stats& s = aggregated_data[base_name][res.solver_name];
+        Stats& s = raw_data[base_name][res.solver_name];
         s.count++;
-        
-        if (res.cost.distance >= MAX_COST || res.cost.distance < 0) {
+        if (res.cost.distance >= 2147483647 || res.cost.distance < 0) {
             s.failures++;
         } else {
             s.smoke += res.cost.smoke;
@@ -104,6 +172,9 @@ void HtmlReportGenerator::generateSummaryReport(const std::vector<Result>& resul
             s.w_cost += res.weighted_cost;
             s.exec_time += res.execution_time;
         }
+
+        SolverCategory cat = categorizeSolver(res.solver_name);
+        hierarchy[cat.processing][cat.environment][cat.algorithm][res.solver_name] = Stats(); 
     }
 
     std::sort(base_scenarios.begin(), base_scenarios.end(), [](const std::string& a, const std::string& b){
@@ -115,55 +186,69 @@ void HtmlReportGenerator::generateSummaryReport(const std::vector<Result>& resul
         return a < b;
     });
 
-    // --- Dynamic Solver List Construction ---
-    // Instead of hardcoding, collect all unique solver names found in results
-    std::vector<std::string> all_solvers;
-    for (const auto& pair : aggregated_data.begin()->second) {
-        all_solvers.push_back(pair.first);
-    }
-    // Sort broadly to keep Serial/Parallel grouped if named consistently
-    std::sort(all_solvers.begin(), all_solvers.end());
+    std::vector<std::string> proc_order = {"Serial Processing (CPU)", "Parallel Processing (GPU)"};
+    std::vector<std::string> env_order = {"Static Environment", "Dynamic Environment"};
+    std::vector<std::string> algo_order = {
+        "Dynamic Programming (DP)", 
+        "Reinforcement Learning (RL)", 
+        "Static Hybrid DP-RL", 
+        "Dynamic Hybrid DP-RL", 
+        "Enhanced Hybrid DP-RL"
+    };
 
     report_file << "<table>\n";
-    report_file << "<thead><tr><th rowspan='2'>Algorithm</th>";
+    report_file << "<thead><tr><th rowspan='2'>Hierarchy / Algorithm</th>";
+    
+    // [FIX 1] Use 'base_scenarios' consistently here
     for(const auto& scn : base_scenarios){
         report_file << "<th colspan='5'>" << scn << "</th>";
     }
-    report_file << "</tr>\n";
-
-    report_file << "<tr>";
-    for(size_t i = 0; i < base_scenarios.size(); ++i){
-        report_file << "<th>Smoke</th><th>Time</th><th>Dist</th><th>W. Cost</th><th>Exec(ms)</th>";
-    }
+    report_file << "</tr>\n<tr>";
+    
+    // [FIX 2] Use 'base_scenarios.size()' for count
+    for(size_t i = 0; i < base_scenarios.size(); ++i) report_file << "<th>Smoke</th><th>Time</th><th>Dist</th><th>W. Cost</th><th>Exec(ms)</th>";
     report_file << "</tr></thead>\n<tbody>";
 
-    for(const auto& solver : all_solvers){
-        report_file << "<tr><td>" << solver << "</td>";
-        for(const auto& scn : base_scenarios){
-            if (aggregated_data.find(scn) == aggregated_data.end() || 
-                aggregated_data[scn].find(solver) == aggregated_data[scn].end()) {
-                report_file << "<td colspan='5' style='color:gray'>Not Run</td>";
-                continue;
-            }
+    for (const auto& proc : proc_order) {
+        if (hierarchy.find(proc) == hierarchy.end()) continue;
+        report_file << "<tr><td colspan='" << (1 + base_scenarios.size() * 5) << "' class='header-level-1'>" << proc << "</td></tr>";
 
-            const auto& stats = aggregated_data[scn][solver];
-            int successful_runs = stats.count - stats.failures;
+        for (const auto& env : env_order) {
+            if (hierarchy[proc].find(env) == hierarchy[proc].end()) continue;
+            report_file << "<tr><td colspan='" << (1 + base_scenarios.size() * 5) << "' class='header-level-2'>" << env << "</td></tr>";
 
-            if (successful_runs > 0) {
-                report_file << "<td>" << (stats.smoke / successful_runs) << "</td>";
-                report_file << "<td>" << (stats.time / successful_runs) << "</td>";
-                report_file << "<td>" << (stats.dist / successful_runs) << "</td>";
-                report_file << "<td>" << static_cast<long long>(stats.w_cost / successful_runs) << "</td>";
-                report_file << "<td>" << std::fixed << std::setprecision(2) << (stats.exec_time / successful_runs) << "</td>";
-            } else if (stats.count > 0) {
-                report_file << "<td colspan='5' style='color:red'>ALL FAILED</td>";
-            } else {
-                report_file << "<td colspan='5' style='color:gray'>Not Run</td>";
+            for (const auto& algo : algo_order) {
+                if (hierarchy[proc][env].find(algo) == hierarchy[proc][env].end()) continue;
+                report_file << "<tr><td colspan='" << (1 + base_scenarios.size() * 5) << "' class='header-level-3'>" << algo << "</td></tr>";
+
+                for (auto const& [solver_name, _] : hierarchy[proc][env][algo]) {
+                    report_file << "<tr><td>" << solver_name << "</td>";
+                    
+                    // [FIX 3] The Critical Fix: Loop over 'base_scenarios' using 'scn'
+                    for(const auto& scn : base_scenarios){
+                        if (raw_data.find(scn) == raw_data.end() || raw_data[scn].find(solver_name) == raw_data[scn].end()) {
+                            report_file << "<td colspan='5' style='color:gray'>Not Run</td>";
+                            continue;
+                        }
+                        
+                        // [FIX 4] 'stats' is now correctly initialized from the map using 'scn'
+                        const auto& stats = raw_data[scn][solver_name];
+                        int successful_runs = stats.count - stats.failures;
+                        if (successful_runs > 0) {
+                            report_file << "<td>" << (stats.smoke / successful_runs) << "</td>";
+                            report_file << "<td>" << (stats.time / successful_runs) << "</td>";
+                            report_file << "<td>" << (stats.dist / successful_runs) << "</td>";
+                            report_file << "<td>" << static_cast<long long>(stats.w_cost / successful_runs) << "</td>";
+                            report_file << "<td>" << std::fixed << std::setprecision(2) << (stats.exec_time / successful_runs) << "</td>";
+                        } else {
+                            report_file << "<td colspan='5' style='color:red'>ALL FAILED</td>";
+                        }
+                    }
+                    report_file << "</tr>\n";
+                }
             }
         }
-        report_file << "</tr>\n";
     }
-
     report_file << "</tbody></table>\n";
     writeHtmlFooter(report_file);
 }
