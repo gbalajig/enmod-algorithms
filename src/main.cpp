@@ -31,21 +31,21 @@
 #include "enmod/DynamicHPASolver.h"
 #include "enmod/DStarLiteSolver.h"
 
-// --- 4. EnMod-DP Hybrid Solvers (Static Baselines) ---
+// --- 4. EnMod-DP Hybrid Solvers (Serial CPU) ---
 #include "enmod/InterlacedSolver.h"
 #include "enmod/HybridDPRLSolver.h"
 #include "enmod/AdaptiveCostSolver.h"
 #include "enmod/HierarchicalSolver.h"
 #include "enmod/PolicyBlendingSolver.h"
 
-// --- 5. EnMod-DP Dynamic Hybrid Solvers (The New "Defense-Ready" Classes) ---
-#include "enmod/DynamicHybridDPRLSolver.h"   // [NEW]
-#include "enmod/DynamicInterlacedSolver.h"   // [NEW]
-#include "enmod/DynamicAdaptiveCostSolver.h" // [NEW]
-#include "enmod/DynamicHierarchicalSolver.h"  // [NEW]
-#include "enmod/DynamicPolicyBlendingSolver.h"// [NEW]
+#include "enmod/DynamicHierarchicalSolver.h"   
+#include "enmod/DynamicPolicyBlendingSolver.h" 
+#include "enmod/DynamicInterlacedSolver.h"   
+#include "enmod/DynamicHybridDPRLSolver.h" 
+#include "enmod/DynamicAdaptiveCostSolver.h"
 
-// --- 6. Parallel Solvers (CUDA GPU) ---
+
+// --- 5. Parallel Solvers (CUDA GPU) ---
 #include "enmod/ParallelBIDP.h"
 #include "enmod/ParallelStaticSolvers.h" 
 #include "enmod/ParallelDynamicBIDPSolver.h"
@@ -53,6 +53,7 @@
 #include "enmod/ParallelHybridSolvers.h" 
 
 #include "enmod/EnhancedHybridDPRLSolver.h"
+#include "enmod/DynamicEnhancedHybridDPRLSolver.h"
 
 #include <cuda_runtime.h>
 #include <iostream>
@@ -66,6 +67,10 @@
 #include <sstream>
 #include <thread>
 
+//#include "enmod/ParallelDynamicSolvers.h"
+//#include "enmod/ParallelEnhancedHybridDPRLSolver.h"
+//#include "enmod/ParallelDynamicEnhancedHybridDPRLSolver.h"
+
 bool isGpuAvailable() {
     int deviceCount = 0;
     cudaError_t error = cudaGetDeviceCount(&deviceCount);
@@ -77,7 +82,7 @@ void runComparisonScenario(const json& config, const std::string& report_path, s
     HtmlReportGenerator::generateInitialGridReport(grid, report_path);
     std::vector<std::unique_ptr<Solver>> solvers;
 
-    // --- 1. Static ---
+    // Static
     solvers.push_back(std::make_unique<FIDP>(grid));   
     solvers.push_back(std::make_unique<BIDP>(grid));   
     solvers.push_back(std::make_unique<AStarSolver>(grid)); 
@@ -85,14 +90,14 @@ void runComparisonScenario(const json& config, const std::string& report_path, s
     solvers.push_back(std::make_unique<API>(grid));
     solvers.push_back(std::make_unique<ADASolver>(grid));
 
-    // --- 2. RL / AI ---
+    // RL / AI
     solvers.push_back(std::make_unique<QLearningSolver>(grid));
     solvers.push_back(std::make_unique<SARSASolver>(grid));
     solvers.push_back(std::make_unique<ActorCriticSolver>(grid));
     solvers.push_back(std::make_unique<RLEnhancedAStarSolver>(grid));
     solvers.push_back(std::make_unique<DQNSolver>(grid));
 
-    // --- 3. Dynamic (Pure Math) ---
+    // Dynamic
     solvers.push_back(std::make_unique<DynamicBIDPSolver>(grid));
     solvers.push_back(std::make_unique<DynamicFIDPSolver>(grid)); 
     solvers.push_back(std::make_unique<DynamicAVISolver>(grid));
@@ -103,21 +108,24 @@ void runComparisonScenario(const json& config, const std::string& report_path, s
     solvers.push_back(std::make_unique<DynamicHPASolver>(grid));
     solvers.push_back(std::make_unique<DStarLiteSolver>(grid));   
 
-    // --- 4. EnMod-DP (Static Baselines) ---
+    // EnMod-DP Serial
     solvers.push_back(std::make_unique<InterlacedSolver>(grid));       
     solvers.push_back(std::make_unique<HybridDPRLSolver>(grid));       
     solvers.push_back(std::make_unique<AdaptiveCostSolver>(grid));     
     solvers.push_back(std::make_unique<HierarchicalSolver>(grid));     
     solvers.push_back(std::make_unique<PolicyBlendingSolver>(grid));   
 
-    // --- 5. EnMod-DP (Dynamic / Real-Time - PROPOSED) ---
+// Dynamic EnMod-DP Serial
     solvers.push_back(std::make_unique<DynamicInterlacedSolver>(grid)); 
-    solvers.push_back(std::make_unique<DynamicHybridDPRLSolver>(grid));
+    solvers.push_back(std::make_unique<DynamicHybridDPRLSolver>(grid));   
     solvers.push_back(std::make_unique<DynamicAdaptiveCostSolver>(grid));
     solvers.push_back(std::make_unique<DynamicHierarchicalSolver>(grid));
-    solvers.push_back(std::make_unique<DynamicPolicyBlendingSolver>(grid)); 
+    solvers.push_back(std::make_unique<DynamicPolicyBlendingSolver>(grid));
 
-    // --- 6. Parallel ---
+    solvers.push_back(std::make_unique<EnhancedHybridDPRLSolver>(grid));
+    solvers.push_back(std::make_unique<DynamicEnhancedHybridDPRLSolver>(grid));
+
+    // Parallel
     if (isGpuAvailable()) {
         solvers.push_back(std::make_unique<ParallelFIDP>(grid)); 
         solvers.push_back(std::make_unique<ParallelBIDP>(grid)); 
@@ -129,10 +137,11 @@ void runComparisonScenario(const json& config, const std::string& report_path, s
         solvers.push_back(std::make_unique<ParallelAdaptiveCostSolver>(grid));
         solvers.push_back(std::make_unique<ParallelHierarchicalSolver>(grid));
         solvers.push_back(std::make_unique<ParallelPolicyBlendingSolver>(grid));
+    //   solvers.push_back(std::make_unique<ParallelDynamicFIDPSolver>(grid));
+    //    solvers.push_back(std::make_unique<ParallelDynamicInterlacedSolver>(grid));
+    //    solvers.push_back(std::make_unique<ParallelEnhancedHybridDPRLSolver>(grid));
+    //    solvers.push_back(std::make_unique<ParallelDynamicEnhancedHybridDPRLSolver>(grid));
     }
-
-    // [THE CHAMPION ALGORITHM]
-    solvers.push_back(std::make_unique<EnhancedHybridDPRLSolver>(grid));
 
     for (const auto& solver : solvers) {
         if (isGpuAvailable()) cudaDeviceSynchronize();
@@ -174,9 +183,10 @@ int main() {
         std::cout << " Output Directory: " << root_folder << "\n";
         std::cout << "========================================================\n";
 
-        std::vector<int> grid_sizes = {10, 20};      
+        std::vector<int> grid_sizes = {5,10};      
         double density = 0.15; 
 
+        // [NEW] Accumulator for Global Comparison
         std::vector<Result> global_results;
 
         for (int size : grid_sizes) {
@@ -189,6 +199,7 @@ int main() {
             std::string agent_io_path = grid_path + "/agent_io";
             std::filesystem::create_directory(agent_io_path);
 
+            // Naming convention starts with size (e.g., "10x10_Benchmark") to ensure sorting
             std::string scenario_name = grid_folder_name + "_Benchmark";
             json config = ScenarioGenerator::generate(size, scenario_name, density);
 
@@ -196,9 +207,12 @@ int main() {
             std::cout << "   -> Phase 1: Running Algorithm Comparisons...\n";
             std::vector<Result> grid_results;
             runComparisonScenario(config, grid_path, grid_results);
+            
+            // Generate Local Summary
             HtmlReportGenerator::generateSummaryReport(grid_results, grid_path, "_Summary_Report.html");
             std::cout << "   -> Summary Report Generated.\n";
 
+            // Add to Global Results
             global_results.insert(global_results.end(), grid_results.begin(), grid_results.end());
 
             // 2. Run Multi-Agent CPS Simulation
@@ -207,6 +221,7 @@ int main() {
             cps_controller.run_simulation();
         }
 
+        // Generate Master Global Report
         std::cout << "\n[Generating Master Global Comparison Report]...\n";
         HtmlReportGenerator::generateSummaryReport(global_results, root_folder, "_Global_Comparison_Report.html");
         std::cout << "   -> Report saved to: " << root_folder << "/_Global_Comparison_Report.html\n";

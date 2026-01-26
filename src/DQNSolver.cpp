@@ -1,206 +1,227 @@
 #include "enmod/DQNSolver.h"
 #include "enmod/Logger.h"
+#include "enmod/json.hpp" 
+#include <iostream>
+#include <fstream>
+#include <filesystem>
 #include <cmath>
 #include <algorithm>
-#include <iostream>
+#include <iomanip>
+#include <random>
+#include <ctime>
 
-// --- Neural Net Implementation ---
+using json = nlohmann::json;
 
-double sigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
-double sigmoid_derivative(double x) { double s = sigmoid(x); return s * (1.0 - s); }
-double random_weight() { return ((double)rand() / RAND_MAX) * 2.0 - 1.0; }
-
-SimpleNeuralNet::SimpleNeuralNet(int in, int hidden, int out) 
-    : input_size(in), hidden_size(hidden), output_size(out) {
-    
-    W1.resize(in, std::vector<double>(hidden));
-    b1.resize(hidden);
-    W2.resize(hidden, std::vector<double>(out));
-    b2.resize(out);
-
-    for(int i=0; i<in; ++i) for(int j=0; j<hidden; ++j) W1[i][j] = random_weight();
-    for(int j=0; j<hidden; ++j) b1[j] = random_weight();
-    for(int j=0; j<hidden; ++j) for(int k=0; k<out; ++k) W2[j][k] = random_weight();
-    for(int k=0; k<out; ++k) b2[k] = random_weight();
+DQNSolver::DQNSolver(const Grid& grid_ref) 
+    : Solver(grid_ref, "DQNSolver"),
+      epsilon(0.9),      
+      epsilon_decay(0.995),
+      min_epsilon(0.01),
+      alpha(0.1),        
+      gamma(0.95),       
+      max_episodes(1000),
+      total_cost{0,0,0} // Default init
+{
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
 }
 
-std::vector<double> SimpleNeuralNet::forward(const std::vector<double>& inputs) {
-    std::vector<double> hidden(hidden_size);
-    std::vector<double> output(output_size);
-
-    for(int j=0; j<hidden_size; ++j) {
-        double sum = b1[j];
-        for(int i=0; i<input_size; ++i) sum += inputs[i] * W1[i][j];
-        hidden[j] = sigmoid(sum);
-    }
-
-    for(int k=0; k<output_size; ++k) {
-        double sum = b2[k];
-        for(int j=0; j<hidden_size; ++j) sum += hidden[j] * W2[j][k];
-        output[k] = sum; 
-    }
-    return output;
-}
-
-void SimpleNeuralNet::backprop(const std::vector<double>& inputs, const std::vector<double>& targets, double lr) {
-    std::vector<double> hidden(hidden_size);
-    std::vector<double> hidden_raw(hidden_size);
-    
-    for(int j=0; j<hidden_size; ++j) {
-        double sum = b1[j];
-        for(int i=0; i<input_size; ++i) sum += inputs[i] * W1[i][j];
-        hidden_raw[j] = sum;
-        hidden[j] = sigmoid(sum);
-    }
-
-    std::vector<double> output(output_size);
-    for(int k=0; k<output_size; ++k) {
-        double sum = b2[k];
-        for(int j=0; j<hidden_size; ++j) sum += hidden[j] * W2[j][k];
-        output[k] = sum;
-    }
-
-    std::vector<double> output_deltas(output_size);
-    for(int k=0; k<output_size; ++k) output_deltas[k] = output[k] - targets[k]; 
-
-    std::vector<double> hidden_deltas(hidden_size);
-    for(int j=0; j<hidden_size; ++j) {
-        double error = 0.0;
-        for(int k=0; k<output_size; ++k) error += output_deltas[k] * W2[j][k];
-        hidden_deltas[j] = error * sigmoid_derivative(hidden_raw[j]);
-    }
-
-    for(int k=0; k<output_size; ++k) {
-        b2[k] -= lr * output_deltas[k];
-        for(int j=0; j<hidden_size; ++j) W2[j][k] -= lr * output_deltas[k] * hidden[j];
-    }
-
-    for(int j=0; j<hidden_size; ++j) {
-        b1[j] -= lr * hidden_deltas[j];
-        for(int i=0; i<input_size; ++i) W1[i][j] -= lr * hidden_deltas[j] * inputs[i];
-    }
-}
-
-// --- DQNSolver Implementation ---
-
-DQNSolver::DQNSolver(const Grid& grid_ref) : Solver(grid_ref, "DQNSim") {
-    q_network = std::make_unique<SimpleNeuralNet>(2, 16, 4);
-    std::random_device rd;
-    rng.seed(rd());
-}
-
-std::vector<double> DQNSolver::getStateVector(const Position& pos) const {
-    return { 
-        (double)pos.row / std::max(1, grid.getRows()), 
-        (double)pos.col / std::max(1, grid.getCols()) 
-    };
-}
-
-int DQNSolver::getActionIndex(Direction dir) const {
-    if (dir == Direction::UP) return 0;
-    if (dir == Direction::DOWN) return 1;
-    if (dir == Direction::LEFT) return 2;
-    return 3;
-}
-
-Direction DQNSolver::getDirectionFromIndex(int idx) const {
-    if (idx == 0) return Direction::UP;
-    if (idx == 1) return Direction::DOWN;
-    if (idx == 2) return Direction::LEFT;
-    return Direction::RIGHT;
-}
-
-Position DQNSolver::simulateMove(Position pos, Direction dir) {
-    Position next = grid.getNextPosition(pos, dir);
-    if (!grid.isWalkable(next.row, next.col)) return pos;
-    return next;
-}
-
-void DQNSolver::train(int episodes) {
-    for (int e = 0; e < episodes; ++e) {
-        Position state = grid.getStartPosition();
-        int steps = 0;
-        int max_steps = grid.getRows() * grid.getCols();
-
-        while (!grid.isExit(state.row, state.col) && steps < max_steps) {
-            std::vector<double> state_vec = getStateVector(state);
-            std::vector<double> q_values = q_network->forward(state_vec);
-
-            int action_idx = 0;
-            if (((double)rand() / RAND_MAX) < epsilon) {
-                action_idx = rand() % 4;
-            } else {
-                action_idx = (int)std::distance(q_values.begin(), std::max_element(q_values.begin(), q_values.end()));
-            }
-
-            Direction action = getDirectionFromIndex(action_idx);
-            Position next_state = simulateMove(state, action);
-            
-            double reward = -0.1; 
-            if (grid.isExit(next_state.row, next_state.col)) reward = 100.0;
-            else if (next_state == state) reward = -1.0; 
-
-            std::vector<double> next_state_vec = getStateVector(next_state);
-            std::vector<double> next_q = q_network->forward(next_state_vec);
-            double max_next_q = *std::max_element(next_q.begin(), next_q.end());
-            
-            double target = reward + gamma * max_next_q;
-            std::vector<double> targets = q_values;
-            targets[action_idx] = target; 
-
-            q_network->backprop(state_vec, targets, learning_rate);
-
-            state = next_state;
-            steps++;
-        }
-        if (epsilon > epsilon_min) epsilon *= epsilon_decay;
-    }
-}
-
-Direction DQNSolver::chooseAction(const Position& current_pos) {
-    std::vector<double> state_vec = getStateVector(current_pos);
-    std::vector<double> q_values = q_network->forward(state_vec);
-    int action_idx = (int)std::distance(q_values.begin(), std::max_element(q_values.begin(), q_values.end()));
-    return getDirectionFromIndex(action_idx);
-}
+// --- CORE LOGIC ---
 
 void DQNSolver::run() {
-    Position current = grid.getStartPosition();
-    total_cost = {0,0,0};
+    std::string model_file = "data/dqn_model_" + grid.getName() + ".json";
     
-    // [FIX] clear() works now that vector<StepReport> is valid
-    history.clear(); 
+    // Ensure data directory exists
+    if (!std::filesystem::exists("data")) {
+        std::filesystem::create_directory("data");
+    }
+
+    bool model_loaded = loadModel(model_file);
+
+    if (model_loaded) {
+        Logger::log(LogLevel::INFO, "DQN: Model loaded. Skipping training.");
+        epsilon = min_epsilon; // Exploitation mode
+    } else {
+        Logger::log(LogLevel::INFO, "DQN: No model found. Starting training...");
+        train();
+        saveModel(model_file);
+    }
+
+    navigate();
+}
+
+void DQNSolver::train() {
+    int rows = grid.getRows();
+    int cols = grid.getCols();
+    Position start = grid.getStartPosition();
+
+    for (int episode = 0; episode < max_episodes; ++episode) {
+        Position state = start;
+        int step_count = 0;
+        int max_steps = rows * cols * 2;
+        
+        while (step_count < max_steps) {
+            if (grid.isExit(state.row, state.col)) break;
+
+            // 1. Action
+            int action_idx = chooseAction(state); 
+
+            // 2. Step
+            Position next_state = getNextPosition(state, action_idx);
+            
+            // 3. Reward
+            double reward = -1.0; 
+            if (grid.isExit(next_state.row, next_state.col)) reward = 100.0;
+            else if (grid.getCellType(next_state) == CellType::WALL) reward = -100.0;
+            else if (grid.getCellType(next_state) == CellType::FIRE) reward = -50.0;
+            else if (grid.getSmokeIntensity(next_state) == "heavy") reward = -20.0;
+
+            // 4. Update
+            double old_q = getQValue(state, action_idx);
+            double max_next_q = getMaxQ(next_state);
+            double new_q = old_q + alpha * (reward + gamma * max_next_q - old_q);
+            setQValue(state, action_idx, new_q);
+
+            // 5. Transition
+            if (grid.isWalkable(next_state.row, next_state.col)) {
+                state = next_state;
+            }
+
+            step_count++;
+        }
+
+        if (epsilon > min_epsilon) epsilon *= epsilon_decay;
+    }
+}
+
+void DQNSolver::navigate() {
+    path.clear();
+    total_cost = {0, 0, 0}; 
+
+    Position current = grid.getStartPosition();
+    path.push_back(current);
     
     int steps = 0;
-    EvacuationMode mode = EvacuationMode::NORMAL;
+    int max_steps = grid.getRows() * grid.getCols() * 2;
 
-    while(!grid.isExit(current.row, current.col) && steps < 200) {
-        Direction dir = chooseAction(current);
-        Position next = simulateMove(current, dir);
-        
-        std::string act = "STAY";
-        if(dir == Direction::UP) act = "UP";
-        if(dir == Direction::DOWN) act = "DOWN";
-        if(dir == Direction::LEFT) act = "LEFT";
-        if(dir == Direction::RIGHT) act = "RIGHT";
+    while (steps < max_steps) {
+        if (grid.isExit(current.row, current.col)) break;
 
-        // [FIX] Correct construction of StepReport
-        history.push_back({
-            steps, 
-            grid, 
-            current, 
-            act, 
-            total_cost, 
-            mode
-        });
+        // Greedy choice
+        int best_action = -1;
+        double best_val = -1e9;
         
-        if(current == next) break; // Stuck
-        current = next;
-        total_cost.distance++;
-        total_cost.time++;
+        for (int a = 0; a < 4; ++a) {
+            Position next = getNextPosition(current, a);
+            if (grid.isWalkable(next.row, next.col)) {
+                double q = getQValue(current, a);
+                if (q > best_val) {
+                    best_val = q;
+                    best_action = a;
+                }
+            }
+        }
+
+        if (best_action == -1) break; // Trapped
+
+        Position next_pos = getNextPosition(current, best_action);
+        
+        // Sum up cost
+        Cost move_cost = grid.getMoveCost(current);
+        total_cost = total_cost + move_cost;
+
+        current = next_pos;
+        path.push_back(current);
         steps++;
     }
 }
 
-Cost DQNSolver::getEvacuationCost() const { return total_cost; }
-void DQNSolver::generateReport(std::ofstream& f) const { f << "<h2>DQN Report</h2>"; }
+// --- PERSISTENCE ---
+
+void DQNSolver::saveModel(const std::string& filename) const {
+    try {
+        json j;
+        for (const auto& entry : q_table) {
+            std::string key = std::to_string(entry.first.row) + "," + std::to_string(entry.first.col);
+            j["q_table"][key] = entry.second;
+        }
+        std::ofstream o(filename);
+        o << std::setw(4) << j << std::endl;
+        Logger::log(LogLevel::INFO, "DQN: Saved model to " + filename);
+    } catch (const std::exception& e) {
+        Logger::log(LogLevel::ERROR, "DQN: Save failed - " + std::string(e.what()));
+    }
+}
+
+bool DQNSolver::loadModel(const std::string& filename) {
+    if (!std::filesystem::exists(filename)) return false;
+    try {
+        std::ifstream i(filename);
+        json j;
+        i >> j;
+        q_table.clear();
+        for (auto& el : j["q_table"].items()) {
+            std::string key = el.key();
+            size_t comma = key.find(',');
+            int r = std::stoi(key.substr(0, comma));
+            int c = std::stoi(key.substr(comma + 1));
+            q_table[{r, c}] = el.value().get<std::vector<double>>();
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// --- HELPERS ---
+
+int DQNSolver::chooseAction(const Position& state) {
+    if ((double)std::rand() / RAND_MAX < epsilon) return std::rand() % 4;
+    
+    int best_a = 0;
+    double max_q = -1e9;
+    for (int a = 0; a < 4; ++a) {
+        double q = getQValue(state, a);
+        if (q > max_q) {
+            max_q = q;
+            best_a = a;
+        }
+    }
+    return best_a;
+}
+
+double DQNSolver::getQValue(const Position& state, int action) {
+    if (q_table.find(state) == q_table.end()) q_table[state] = std::vector<double>(4, 0.0);
+    return q_table[state][action];
+}
+
+void DQNSolver::setQValue(const Position& state, int action, double val) {
+    if (q_table.find(state) == q_table.end()) q_table[state] = std::vector<double>(4, 0.0);
+    q_table[state][action] = val;
+}
+
+double DQNSolver::getMaxQ(const Position& state) {
+    if (q_table.find(state) == q_table.end()) return 0.0;
+    const auto& q_vals = q_table[state];
+    return *std::max_element(q_vals.begin(), q_vals.end());
+}
+
+Position DQNSolver::getNextPosition(const Position& p, int action) {
+    int r = p.row; 
+    int c = p.col;
+    if (action == 0) r--; // UP
+    else if (action == 1) r++; // DOWN
+    else if (action == 2) c--; // LEFT
+    else if (action == 3) c++; // RIGHT
+    return {r, c};
+}
+
+Cost DQNSolver::getEvacuationCost() const {
+    return total_cost;
+}
+
+void DQNSolver::generateReport(std::ofstream& report_file) const {
+    report_file << "<h3>DQN Solver Report</h3>";
+    report_file << "<p><strong>Training Episodes:</strong> " << max_episodes << "</p>";
+    report_file << "<p><strong>Path Length:</strong> " << path.size() << "</p>";
+    report_file << grid.toHtmlStringWithPath(path);
+}

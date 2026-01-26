@@ -1,4 +1,9 @@
 #include "enmod/Solver.h"
 
-// Empty - All methods are pure virtual or defined inline in header.
-// This prevents "redefinition" errors.
+Solver::Solver(const Grid& grid_ref, const std::string& name) 
+    : grid(grid_ref), solver_name(name) {}
+
+const std::string& Solver::getName() const {
+    return solver_name;
+}
+
