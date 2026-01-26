@@ -1,29 +1,32 @@
-#ifndef ENMOD_ENHANCED_HYBRID_DP_RL_SOLVER_H
-#define ENMOD_ENHANCED_HYBRID_DP_RL_SOLVER_H
+#ifndef ENMOD_ENHANCED_HYBRID_DPRL_SOLVER_H
+#define ENMOD_ENHANCED_HYBRID_DPRL_SOLVER_H
 
-#include "DynamicSolver.h"
-#include "Types.h"
-#include "InterlacedSolver.h"
-#include "DQNSolver.h" 
+#include "Solver.h"
+#include "Grid.h"
+#include "InterlacedSolver.h" // The advanced DP component
+#include "DQNSolver.h"        // The advanced RL component
+#include <vector>
 #include <memory>
 
 class EnhancedHybridDPRLSolver : public Solver {
 public:
-    EnhancedHybridDPRLSolver(const Grid& grid_ref);
+    EnhancedHybridDPRLSolver(const Grid& grid);
+    virtual ~EnhancedHybridDPRLSolver() = default;
+
     void run() override;
-    Direction getNextMove(const Position& current_pos, const Grid& current_grid); 
     Cost getEvacuationCost() const override;
     void generateReport(std::ofstream& report_file) const override;
 
 private:
-    std::vector<StepReport> history;
+    // We compose the specialized solvers to leverage their logic
+    std::unique_ptr<InterlacedSolver> dp_guide;
+    std::unique_ptr<DQNSolver> rl_navigator;
+
+    std::vector<Position> path;
     Cost total_cost;
-    EvacuationMode current_mode;
 
-    // Advanced RL Agent (DQN)
-    std::unique_ptr<DQNSolver> rl_solver;
-
-    void assessThreatAndSetMode(const Position& current_pos, const Grid& current_grid);
+    // Helper to blend the logic
+    void executeHybridNavigation();
 };
 
-#endif // ENMOD_ENHANCED_HYBRID_DP_RL_SOLVER_H
+#endif // ENMOD_ENHANCED_HYBRID_DPRL_SOLVER_H
